@@ -1,0 +1,44 @@
+{
+  "LOG": true,
+  "LOG_LEVEL": "debug",
+  "APIKEY": "INVEST_WIN",
+  "HOST": "127.0.0.1",
+  "PORT": 3456,
+  "API_TIMEOUT_MS": "600000",
+
+  "Completion": {
+    "auto_limit": true,
+    "safety_margin_tokens": 1024,
+    "max_completion_tokens_cap": 8192
+  },
+
+  "Providers": [
+    {
+      "name": "qwen3-64k",
+      "api_base_url": "http://qwen.finetuning/v1/chat/completions",
+      "api_key": "sk-xxx",
+      "models": ["qwen3-coder"],
+      "max_context_tokens": 65536
+    },
+    {
+      "name": "qwen3-32k",
+      "api_base_url": "http://qwen.finetuning/v1/chat/completions",
+      "api_key": "sk-xxx",
+      "models": ["qwen3-coder"],
+      "max_context_tokens": 32768
+    },
+    {
+      "name": "claude-sonnet",
+      "api_base_url": "https://apiHK.Ai",
+      "api_key": "sk-CfuS0xBW5Knk9KXRxtBGc9r4XAHUrPP1YxO4UWIL7yOXL6b4",
+      "models": ["claude-3-5-sonnet"],
+      "max_context_tokens": 200000
+    }
+  ],
+
+  "Router": {
+    "default": "qwen3-64k,qwen3-coder",
+    "longContext": "claude-sonnet,claude-3-5-sonnet",
+    "longContextThreshold": 60000
+  }
+}

@@ -179,8 +179,48 @@ const getUseModel = async (
   return Router!.default;
 };
 
+/**
+ * Trim messages to fit within token budget
+ * Keeps the most recent messages and removes older ones
+ */
+const trimMessagesToFit = (
+  messages: MessageParam[],
+  maxTokens: number,
+  system: any,
+  tools: Tool[]
+): MessageParam[] => {
+  // Calculate current token count
+  let currentTokens = calculateTokenCount(messages, system, tools);
+
+  if (currentTokens <= maxTokens) {
+    return messages; // No trimming needed
+  }
+
+  // Strategy: Keep the most recent messages, remove oldest first
+  const trimmedMessages = [...messages];
+  let removedCount = 0;
+
+  // Always keep the last user message
+  while (currentTokens > maxTokens && trimmedMessages.length > 2) {
+    // Remove the oldest message (but keep the last user message)
+    if (trimmedMessages.length > 2) {
+      trimmedMessages.shift();
+      removedCount++;
+      currentTokens = calculateTokenCount(trimmedMessages, system, tools);
+    } else {
+      break;
+    }
+  }
+
+  return trimmedMessages;
+};
+
 export const router = async (req: any, _res: any, context: any) => {
   const { config, event } = context;
+
+  // Log router version for debugging
+  req.log.debug(`[Router v1.0.73] Processing request`);
+
   // Parse sessionId from metadata.user_id
   if (req.body.metadata?.user_id) {
     const parts = req.body.metadata.user_id.split("_session_");
@@ -189,7 +229,7 @@ export const router = async (req: any, _res: any, context: any) => {
     }
   }
   const lastMessageUsage = sessionUsageCache.get(req.sessionId);
-  const { messages, system = [], tools }: MessageCreateParamsBase = req.body;
+  let { messages, system = [], tools }: MessageCreateParamsBase = req.body;
   if (
     config.REWRITE_SYSTEM_PROMPT &&
     system.length > 1 &&
@@ -200,7 +240,7 @@ export const router = async (req: any, _res: any, context: any) => {
   }
 
   try {
-    const tokenCount = calculateTokenCount(
+    let tokenCount = calculateTokenCount(
       messages as MessageParam[],
       system,
       tools as Tool[]
@@ -222,6 +262,74 @@ export const router = async (req: any, _res: any, context: any) => {
       model = await getUseModel(req, tokenCount, config, lastMessageUsage);
     }
     req.body.model = model;
+
+    // Get provider configuration
+    const [providerName] = model.split(',');
+    const provider = config.Providers?.find((p: any) => p.name === providerName);
+
+    if (provider?.max_context_tokens) {
+      // Get configuration values with defaults
+      const safetyMargin = config.Completion?.safety_margin_tokens ?? 1024;
+      const maxCompletionCap = config.Completion?.max_completion_tokens_cap ?? 8192;
+      const autoLimit = config.Completion?.auto_limit !== false; // default to true
+      const autoTrim = config.Completion?.auto_trim !== false; // default to true
+      const maxInputTokens = provider.max_context_tokens - maxCompletionCap - safetyMargin;
+
+      // Auto-trim messages if input tokens exceed budget
+      if (autoTrim && tokenCount > maxInputTokens) {
+        const originalMessageCount = messages.length;
+        const originalTokenCount = tokenCount;
+
+        req.log.info(
+          `Input tokens (${tokenCount}) exceed budget (${maxInputTokens}). ` +
+          `Auto-trimming messages...`
+        );
+
+        const trimmedMessages = trimMessagesToFit(
+          messages as MessageParam[],
+          maxInputTokens,
+          system,
+          tools as Tool[]
+        );
+
+        messages = trimmedMessages;
+        req.body.messages = trimmedMessages;
+        tokenCount = calculateTokenCount(trimmedMessages, system, tools as Tool[]);
+
+        req.log.info(
+          `Trimmed ${originalMessageCount - trimmedMessages.length} messages ` +
+          `(${originalTokenCount} -> ${tokenCount} tokens)`
+        );
+      }
+
+      if (autoLimit) {
+        // Calculate available tokens for completion
+        const availableTokens = provider.max_context_tokens - tokenCount - safetyMargin;
+
+        // Ensure we don't exceed the cap or go negative
+        const calculatedMaxTokens = Math.max(
+          100, // minimum tokens for a response
+          Math.min(availableTokens, maxCompletionCap)
+        );
+
+        // FORCE set max_tokens (don't check if it exists)
+        req.body.max_tokens = calculatedMaxTokens;
+        req.log.info(
+          `Set max_tokens to ${calculatedMaxTokens} ` +
+          `(input: ${tokenCount}, max_context: ${provider.max_context_tokens}, ` +
+          `available: ${availableTokens}, safety_margin: ${safetyMargin}, cap: ${maxCompletionCap})`
+        );
+
+        // Log warning if context is still nearly full even after trimming
+        if (tokenCount > provider.max_context_tokens * 0.9) {
+          req.log.warn(
+            `Input tokens (${tokenCount}) are still using >90% of max context ` +
+            `(${provider.max_context_tokens}) even after trimming. ` +
+            `Consider using a long-context model or reducing message complexity.`
+          );
+        }
+      }
+    }
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);
     req.body.model = config.Router!.default;
