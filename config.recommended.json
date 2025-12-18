@@ -30,7 +30,7 @@
     {
       "name": "claude-sonnet",
       "api_base_url": "https://apiHK.Ai",
-      "api_key": "sk-CfuS0xBW5Knk9KXRxtBGc9r4XAHUrPP1YxO4UWIL7yOXL6b4",
+      "api_key": "sk-XXX",
       "models": ["claude-3-5-sonnet"],
       "max_context_tokens": 200000
     }
